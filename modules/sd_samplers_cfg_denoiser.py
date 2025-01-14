@@ -114,7 +114,7 @@ if opts.sd_sampler_cfg_denoiser == "reForge":
 
             return cond, uncond
 
-        def forward(self, x, sigma, uncond, cond, cond_scale, s_min_uncond, image_cond, **kwargs):
+        def forward(self, x, sigma, uncond, cond, cond_scale, s_min_uncond, s_max_uncond, image_cond, **kwargs):
             if shared.state.interrupted or shared.state.skipped:
                 raise sd_samplers_common.InterruptedException
 
@@ -162,6 +162,12 @@ if opts.sd_sampler_cfg_denoiser == "reForge":
             # Initialize skip_uncond
             skip_uncond = False
 
+            #guidance-interval logic
+            if s_max_uncond > 0 and sigma[0] > s_max_uncond and not is_edit_model:
+                skip_uncond = True
+                self.p.extra_generation_params["guidance_interval_sigma_max"] = s_max_uncond
+                print(f"Applying NGMaxS at step {self.step}: s_max_uncond = {s_max_uncond}, sigma = {sigma[0]}")
+
             # NGMS logic
             if s_min_uncond > 0 and sigma[0] < s_min_uncond and not is_edit_model:
                 if self.step % 2 == 0 or shared.opts.s_min_uncond_all:
@@ -169,7 +175,7 @@ if opts.sd_sampler_cfg_denoiser == "reForge":
                     self.p.extra_generation_params["NGMS"] = s_min_uncond
                     if shared.opts.s_min_uncond_all:
                         self.p.extra_generation_params["NGMS all steps"] = shared.opts.s_min_uncond_all
-                    print(f"Applying NGMS at step {self.step}: s_min_uncond = {s_min_uncond}, sigma = {sigma[0]}")
+                    print(f"Applying NGMinS at step {self.step}: s_min_uncond = {s_min_uncond}, sigma = {sigma[0]}")
 
             # Existing skip_early_cond logic
             if not skip_uncond:

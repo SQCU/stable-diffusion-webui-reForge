@@ -1,0 +1,3 @@
+Place into your WebUI base folder. Run with the following command:
+python .\loratags.py .\model\lora\<YOURLORA>.safetensors
+https://pastebin.com/S7XYxZT1

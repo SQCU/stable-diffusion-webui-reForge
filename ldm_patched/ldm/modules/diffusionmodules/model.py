@@ -21,6 +21,8 @@ if model_management.xformers_enabled_vae():
     import xformers
     import xformers.ops
 
+from inspect import getattr_static
+
 def get_timestep_embedding(timesteps, embedding_dim):
     """
     This matches the implementation in Denoising Diffusion Probabilistic Models:
@@ -104,12 +106,15 @@ class Downsample(nn.Module):
 
 class ResnetBlock(nn.Module):
     def __init__(self, *, in_channels, out_channels=None, conv_shortcut=False,
-                 dropout, temb_channels=512):
+                 dropout, temb_channels=512, learnable_lambdas=0):
         super().__init__()
         self.in_channels = in_channels
         out_channels = in_channels if out_channels is None else out_channels
         self.out_channels = out_channels
         self.use_conv_shortcut = conv_shortcut
+        self.learnable_lambdas=learnable_lambdas
+        if self.learnable_lambdas:
+            self.learnedlambda1 = nn.Parameter(torch.tensor(1.0))
 
         self.swish = torch.nn.SiLU(inplace=True)
         self.norm1 = Normalize(in_channels)
@@ -162,7 +167,10 @@ class ResnetBlock(nn.Module):
             else:
                 x = self.nin_shortcut(x)
 
-        return x+h
+        if self.learnable_lambdas:
+            return self.learnedlambda1*x+h
+        else:
+            return x+h
 
 def slice_attention(q, k, v):
     r1 = torch.zeros_like(k, device=q.device)
@@ -248,9 +256,16 @@ def pytorch_attention(q, k, v):
 
 
 class AttnBlock(nn.Module):
-    def __init__(self, in_channels):
+    def __init__(self, in_channels, learnable_lambdas=False):
         super().__init__()
         self.in_channels = in_channels
+        #yeah honestly i have no idea what the calling order is here. 
+        #this *might* be a default which is overridden by the real model state dict.
+        #or it might not get overridden for inscrutable torch reasons. not much else do to here though.
+        self.learnable_lambdas=learnable_lambdas
+        if self.learnable_lambdas:
+            self.learnedlambda1 = nn.Parameter(torch.tensor(1.0))
+        # on contemplation, initializing the learnedlambda, but to the identity (lambda=1) case, seems most correct.
 
         self.norm = Normalize(in_channels)
         self.q = ops.Conv2d(in_channels,
@@ -294,18 +309,20 @@ class AttnBlock(nn.Module):
         h_ = self.optimized_attention(q, k, v)
 
         h_ = self.proj_out(h_)
+        #super scary learned skip attenuation operation
+        if self.learnable_lambdas:
+            return self.learnedlambda1*x+h_
+        else:
+            return x+h_
 
-        return x+h_
-
-
-def make_attn(in_channels, attn_type="vanilla", attn_kwargs=None):
-    return AttnBlock(in_channels)
+def make_attn(in_channels, attn_type="vanilla", attn_kwargs=None, learnable_lambdas=False):
+    return AttnBlock(in_channels, learnable_lambdas=learnable_lambdas)
 
 
 class Model(nn.Module):
     def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
-                 resolution, use_timestep=True, use_linear_attn=False, attn_type="vanilla"):
+                 resolution, use_timestep=True, use_linear_attn=False, attn_type="vanilla", learnable_lambdas=0):
         super().__init__()
         if use_linear_attn: attn_type = "linear"
         self.ch = ch
@@ -314,6 +331,7 @@ class Model(nn.Module):
         self.num_res_blocks = num_res_blocks
         self.resolution = resolution
         self.in_channels = in_channels
+        self.learnable_lambdas=learnable_lambdas
 
         self.use_timestep = use_timestep
         if self.use_timestep:
@@ -345,10 +363,11 @@ class Model(nn.Module):
                 block.append(ResnetBlock(in_channels=block_in,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
-                                         dropout=dropout))
+                                         dropout=dropout,
+                                         learnable_lambdas=learnable_lambdas))
                 block_in = block_out
                 if curr_res in attn_resolutions:
-                    attn.append(make_attn(block_in, attn_type=attn_type))
+                    attn.append(make_attn(block_in, attn_type=attn_type, learnable_lambdas=learnable_lambdas))
             down = nn.Module()
             down.block = block
             down.attn = attn
@@ -362,12 +381,14 @@ class Model(nn.Module):
         self.mid.block_1 = ResnetBlock(in_channels=block_in,
                                        out_channels=block_in,
                                        temb_channels=self.temb_ch,
-                                       dropout=dropout)
-        self.mid.attn_1 = make_attn(block_in, attn_type=attn_type)
+                                       dropout=dropout,
+                                       learnable_lambdas=learnable_lambdas)
+        self.mid.attn_1 = make_attn(block_in, attn_type=attn_type, learnable_lambdas=learnable_lambdas)
         self.mid.block_2 = ResnetBlock(in_channels=block_in,
                                        out_channels=block_in,
                                        temb_channels=self.temb_ch,
-                                       dropout=dropout)
+                                       dropout=dropout,
+                                       learnable_lambdas=learnable_lambdas)
 
         # upsampling
         self.up = nn.ModuleList()
@@ -382,10 +403,11 @@ class Model(nn.Module):
                 block.append(ResnetBlock(in_channels=block_in+skip_in,
                                          out_channels=block_out,
                                          temb_channels=self.temb_ch,
-                                         dropout=dropout))
+                                         dropout=dropout,
+                                         learnable_lambdas=learnable_lambdas))
                 block_in = block_out
                 if curr_res in attn_resolutions:
-                    attn.append(make_attn(block_in, attn_type=attn_type))
+                    attn.append(make_attn(block_in, attn_type=attn_type, learnable_lambdas=learnable_lambdas))
             up = nn.Module()
             up.block = block
             up.attn = attn

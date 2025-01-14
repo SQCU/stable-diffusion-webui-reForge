@@ -130,6 +130,35 @@ def detect_unet_config(state_dict, key_prefix, dtype):
     else:
         transformer_depth_middle = -1
 
+    #lambdacheck:
+    lambdakeyset = {}
+    def statedict_lambdayoink(name):
+        return "learnedlambda" in name.lower()
+    def lambdalevel(ldict):
+        for key in ldict.keys():
+            if "learnedlambda3" in key.lower():
+                return 3
+        for key in ldict.keys():
+            if "learnedlambda1" in key.lower():
+                return 1
+        else:
+            print("what's the matter? NO LAMBDAS?")
+            return 0
+            
+    lambdakeyset = { 
+        lambdakey:state_dict[lambdakey] for lambdakey in state_dict_keys 
+        if statedict_lambdayoink(lambdakey) 
+        }
+
+    #qkncheck:
+    def statedict_qknyoink(name):
+        return "qkn_gnought" in name.lower()
+
+    qknormkeyset = { 
+        qknormkey:state_dict[qknormkey] for qknormkey in state_dict_keys 
+        if statedict_qknyoink(qknormkey) 
+        }
+
     unet_config["in_channels"] = in_channels
     unet_config["out_channels"] = out_channels
     unet_config["model_channels"] = model_channels
@@ -140,6 +169,11 @@ def detect_unet_config(state_dict, key_prefix, dtype):
     unet_config["transformer_depth_middle"] = transformer_depth_middle
     unet_config['use_linear_in_transformer'] = use_linear_in_transformer
     unet_config["context_dim"] = context_dim
+    if len(lambdakeyset)>1:
+        #unet_config["learnable_lambdas"] = True
+        unet_config["learnable_lambdas"] = lambdalevel(lambdakeyset) # we LOVE compatibility patches
+    if len(qknormkeyset)>1:
+        unet_config["use_qknorm"] = True
 
     if video_model:
         unet_config["extra_ff_mix_layer"] = True

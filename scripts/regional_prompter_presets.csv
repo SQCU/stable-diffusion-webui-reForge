@@ -1,0 +1,5 @@
+"name","mode","divide ratios,"use base","baseratios","usecom","usencom","calcmode"
+Vertical-3,Vertical,"1,1,1",,False,False,False
+Horizontal-3,Horizontal,"1,1,1",,False,False,False
+Horizontal-7,Horizontal,"1,1,1,1,1,1,1",0.2,True,False,False
+lastrun,Horizontal,"1;1","0.2",False,True,False,Attention

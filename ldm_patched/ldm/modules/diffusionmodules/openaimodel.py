@@ -171,7 +171,8 @@ class ResBlock(TimestepBlock):
         skip_t_emb=False,
         dtype=None,
         device=None,
-        operations=ops
+        operations=ops,
+        learnable_lambdas=0
     ):
         super().__init__()
         self.channels = channels
@@ -182,6 +183,9 @@ class ResBlock(TimestepBlock):
         self.use_checkpoint = use_checkpoint
         self.use_scale_shift_norm = use_scale_shift_norm
         self.exchange_temb_dims = exchange_temb_dims
+        self.learnable_lambdas = learnable_lambdas
+        if self.learnable_lambdas:
+            self.learnedlambda1 = nn.Parameter(th.tensor(1.0))
 
         if isinstance(kernel_size, list):
             padding = [k // 2 for k in kernel_size]
@@ -292,7 +296,10 @@ class ResBlock(TimestepBlock):
                 h = self.out_layers[1:](h)
             else:
                 h = self.out_layers(h)
-        return self.skip_connection(x) + h
+        if self.learnable_lambdas:
+            return self.learnedlambda1 * self.skip_connection(x) + h
+        else:
+            return self.skip_connection(x) + h
 
 
 class VideoResBlock(ResBlock):
@@ -466,6 +473,8 @@ class UNetModel(nn.Module):
         max_ddpm_temb_period=10000,
         device=None,
         operations=ops,
+        learnable_lambdas=0,
+        use_qknorm=False
     ):
         super().__init__()
 
@@ -526,6 +535,8 @@ class UNetModel(nn.Module):
             nn.SiLU(),
             operations.Linear(time_embed_dim, time_embed_dim, dtype=self.dtype, device=device),
         )
+        self.learnable_lambdas = learnable_lambdas
+        self.use_qknorm = use_qknorm
 
         if self.num_classes is not None:
             if isinstance(self.num_classes, int):
@@ -565,6 +576,8 @@ class UNetModel(nn.Module):
             context_dim=None,
             use_checkpoint=False,
             disable_self_attn=False,
+            learnable_lambdas=0,
+            use_qknorm=False
         ):
             if use_temporal_attention:
                 return SpatialVideoTransformer(
@@ -590,7 +603,8 @@ class UNetModel(nn.Module):
                 return SpatialTransformer(
                                 ch, num_heads, dim_head, depth=depth, context_dim=context_dim,
                                 disable_self_attn=disable_self_attn, use_linear=use_linear_in_transformer,
-                                use_checkpoint=use_checkpoint, dtype=self.dtype, device=device, operations=operations
+                                use_checkpoint=use_checkpoint, dtype=self.dtype, device=device, operations=operations, 
+                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm 
                             )
 
         def get_resblock(
@@ -608,7 +622,8 @@ class UNetModel(nn.Module):
             up=False,
             dtype=None,
             device=None,
-            operations=ops
+            operations=ops,
+            learnable_lambdas=False
         ):
             if self.use_temporal_resblocks:
                 return VideoResBlock(
@@ -641,7 +656,8 @@ class UNetModel(nn.Module):
                     up=up,
                     dtype=dtype,
                     device=device,
-                    operations=operations
+                    operations=operations,
+                    learnable_lambdas=learnable_lambdas
                 )
 
         for level, mult in enumerate(channel_mult):
@@ -661,6 +677,7 @@ class UNetModel(nn.Module):
                         dtype=self.dtype,
                         device=device,
                         operations=operations,
+                        learnable_lambdas=learnable_lambdas
                     )
                 ]
                 ch = mult * model_channels
@@ -682,7 +699,8 @@ class UNetModel(nn.Module):
                     if not exists(num_attention_blocks) or nr < num_attention_blocks[level]:
                         layers.append(get_attention_layer(
                                 ch, num_heads, dim_head, depth=num_transformers, context_dim=context_dim,
-                                disable_self_attn=disabled_sa, use_checkpoint=use_checkpoint)
+                                disable_self_attn=disabled_sa, use_checkpoint=use_checkpoint,
+                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm)
                         )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
@@ -705,7 +723,8 @@ class UNetModel(nn.Module):
                             down=True,
                             dtype=self.dtype,
                             device=device,
-                            operations=operations
+                            operations=operations,
+                            learnable_lambdas=learnable_lambdas
                         )
                         if resblock_updown
                         else Downsample(
@@ -740,12 +759,14 @@ class UNetModel(nn.Module):
                 use_scale_shift_norm=use_scale_shift_norm,
                 dtype=self.dtype,
                 device=device,
-                operations=operations
+                operations=operations,
+                learnable_lambdas=learnable_lambdas
             )]
         if transformer_depth_middle >= 0:
             mid_block += [get_attention_layer(  # always uses a self-attn
                             ch, num_heads, dim_head, depth=transformer_depth_middle, context_dim=context_dim,
-                            disable_self_attn=disable_middle_self_attn, use_checkpoint=use_checkpoint
+                            disable_self_attn=disable_middle_self_attn, use_checkpoint=use_checkpoint, 
+                            learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm 
                         ),
             get_resblock(
                 merge_factor=merge_factor,
@@ -760,7 +781,8 @@ class UNetModel(nn.Module):
                 use_scale_shift_norm=use_scale_shift_norm,
                 dtype=self.dtype,
                 device=device,
-                operations=operations
+                operations=operations, 
+                learnable_lambdas=learnable_lambdas
             )]
         self.middle_block = TimestepEmbedSequential(*mid_block)
         self._feature_size += ch
@@ -783,7 +805,8 @@ class UNetModel(nn.Module):
                         use_scale_shift_norm=use_scale_shift_norm,
                         dtype=self.dtype,
                         device=device,
-                        operations=operations
+                        operations=operations,
+                        learnable_lambdas=learnable_lambdas
                     )
                 ]
                 ch = model_channels * mult
@@ -806,7 +829,8 @@ class UNetModel(nn.Module):
                         layers.append(
                             get_attention_layer(
                                 ch, num_heads, dim_head, depth=num_transformers, context_dim=context_dim,
-                                disable_self_attn=disabled_sa, use_checkpoint=use_checkpoint
+                                disable_self_attn=disabled_sa, use_checkpoint=use_checkpoint, 
+                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm
                             )
                         )
                 if level and i == self.num_res_blocks[level]:
@@ -826,7 +850,8 @@ class UNetModel(nn.Module):
                             up=True,
                             dtype=self.dtype,
                             device=device,
-                            operations=operations
+                            operations=operations,
+                            learnable_lambdas=learnable_lambdas
                         )
                         if resblock_updown
                         else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch, dtype=self.dtype, device=device, operations=operations)

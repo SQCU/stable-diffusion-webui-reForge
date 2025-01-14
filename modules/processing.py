@@ -172,6 +172,7 @@ if opts.sd_processing == "reForge OG":
         denoising_strength: float = None
         ddim_discretize: str = None
         s_min_uncond: float = None
+        s_max_uncond: float = None
         s_churn: float = None
         s_tmax: float = None
         s_tmin: float = None
@@ -266,6 +267,7 @@ if opts.sd_processing == "reForge OG":
 
         def fill_fields_from_opts(self):
             self.s_min_uncond = self.s_min_uncond if self.s_min_uncond is not None else opts.s_min_uncond
+            self.s_max_uncond = self.s_max_uncond if self.s_max_uncond is not None else opts.s_max_uncond
             self.s_churn = self.s_churn if self.s_churn is not None else opts.s_churn
             self.s_tmin = self.s_tmin if self.s_tmin is not None else opts.s_tmin
             self.s_tmax = (self.s_tmax if self.s_tmax is not None else opts.s_tmax) or float('inf')
@@ -572,6 +574,7 @@ if opts.sd_processing == "reForge OG":
             self.s_tmax = p.s_tmax
             self.s_noise = p.s_noise
             self.s_min_uncond = p.s_min_uncond
+            self.s_max_uncond = p.s_max_uncond
             self.sampler_noise_scheduler_override = p.sampler_noise_scheduler_override
             self.prompt = self.prompt if not isinstance(self.prompt, list) else self.prompt[0]
             self.negative_prompt = self.negative_prompt if not isinstance(self.negative_prompt, list) else self.negative_prompt[0]
@@ -1992,6 +1995,7 @@ elif opts.sd_processing == "reForge A1111":
         denoising_strength: float = None
         ddim_discretize: str = None
         s_min_uncond: float = None
+        s_max_uncond: float = None
         s_churn: float = None
         s_tmax: float = None
         s_tmin: float = None
@@ -2086,6 +2090,7 @@ elif opts.sd_processing == "reForge A1111":
 
         def fill_fields_from_opts(self):
             self.s_min_uncond = self.s_min_uncond if self.s_min_uncond is not None else opts.s_min_uncond
+            self.s_max_uncond = self.s_max_uncond if self.s_max_uncond is not None else opts.s_max_uncond
             self.s_churn = self.s_churn if self.s_churn is not None else opts.s_churn
             self.s_tmin = self.s_tmin if self.s_tmin is not None else opts.s_tmin
             self.s_tmax = (self.s_tmax if self.s_tmax is not None else opts.s_tmax) or float('inf')
@@ -2388,6 +2393,7 @@ elif opts.sd_processing == "reForge A1111":
             self.s_tmax = p.s_tmax
             self.s_noise = p.s_noise
             self.s_min_uncond = p.s_min_uncond
+            self.s_max_uncond = p.s_max_uncond
             self.sampler_noise_scheduler_override = p.sampler_noise_scheduler_override
             self.prompt = self.prompt if not isinstance(self.prompt, list) else self.prompt[0]
             self.negative_prompt = self.negative_prompt if not isinstance(self.negative_prompt, list) else self.negative_prompt[0]

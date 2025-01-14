@@ -46,7 +46,7 @@ def api_only_worker():
     print(f"Startup time: {startup_timer.summary()}.")
     api.launch(
         server_name=initialize_util.gradio_server_name(),
-        port=cmd_opts.port if cmd_opts.port else 7861,
+        port=cmd_opts.port if cmd_opts.port else 7862,
         root_path=f"/{cmd_opts.subpath}" if cmd_opts.subpath else ""
     )
 

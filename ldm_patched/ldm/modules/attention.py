@@ -321,7 +321,7 @@ def attention_xformers(q, k, v, heads, mask=None):
     )
     return out
 
-def attention_pytorch(q, k, v, heads, mask=None):
+def attention_pytorch(q, k, v, heads, mask=None, use_qknorm=False, scale=None):
     b, _, dim_head = q.shape
     dim_head //= heads
     q, k, v = map(
@@ -329,7 +329,16 @@ def attention_pytorch(q, k, v, heads, mask=None):
         (q, k, v),
     )
 
-    out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=False)
+    if use_qknorm:
+        #this is the qknorm part!
+        q = F.normalize(q, p=2, dim=-1) #qhat
+        k = F.normalize(k, p=2, dim=-1) #keyhat
+        
+        torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=False, scale=scale)
+
+    else: #suspicious about that 'scale' parameter.
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0, is_causal=False)
+
     out = (
         out.transpose(1, 2).reshape(b, -1, heads * dim_head)
     )
@@ -371,10 +380,14 @@ def optimized_attention_for_device(device, mask=False, small_input=False):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0., dtype=None, device=None, operations=ops):
+    def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0., dtype=None, device=None, operations=ops, use_qknorm=False):
         super().__init__()
         inner_dim = dim_head * heads
         context_dim = default(context_dim, query_dim)
+
+        self.use_qknorm=use_qknorm
+        if self.use_qknorm:
+            self.qkn_gnought = nn.Parameter(torch.tensor(1.0))
 
         self.heads = heads
         self.dim_head = dim_head
@@ -395,6 +408,8 @@ class CrossAttention(nn.Module):
         else:
             v = self.to_v(context)
 
+        if self.use_qknorm:
+            out = optimized_attention(q, k, v, self.heads, use_qknorm=False, scale=self.qkn_gnought)
         if mask is None:
             out = optimized_attention(q, k, v, self.heads)
         else:
@@ -404,7 +419,7 @@ class CrossAttention(nn.Module):
 
 class BasicTransformerBlock(nn.Module):
     def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True, ff_in=False, inner_dim=None,
-                 disable_self_attn=False, disable_temporal_crossattention=False, switch_temporal_ca_to_sa=False, dtype=None, device=None, operations=ops):
+                 disable_self_attn=False, disable_temporal_crossattention=False, switch_temporal_ca_to_sa=False, dtype=None, device=None, operations=ops, learnable_lambdas=0, use_qknorm=False):
         super().__init__()
 
         self.ff_in = ff_in or inner_dim is not None
@@ -412,6 +427,12 @@ class BasicTransformerBlock(nn.Module):
             inner_dim = dim
 
         self.is_res = inner_dim == dim
+        self.learnable_lambdas = learnable_lambdas
+        self.use_qknorm = use_qknorm
+        if self.learnable_lambdas:
+            self.learnedlambda1 = nn.Parameter(torch.tensor(1.0))   #resnet or MLP
+            self.learnedlambda2 = nn.Parameter(torch.tensor(1.0))   #x-attn
+            self.learnedlambda3 = nn.Parameter(torch.tensor(1.0))   #s-attn
 
         if self.ff_in:
             self.norm_in = operations.LayerNorm(dim, dtype=dtype, device=device)
@@ -419,7 +440,7 @@ class BasicTransformerBlock(nn.Module):
 
         self.disable_self_attn = disable_self_attn
         self.attn1 = CrossAttention(query_dim=inner_dim, heads=n_heads, dim_head=d_head, dropout=dropout,
-                              context_dim=context_dim if self.disable_self_attn else None, dtype=dtype, device=device, operations=operations)  # is a self-attention if not self.disable_self_attn
+                              context_dim=context_dim if self.disable_self_attn else None, dtype=dtype, device=device, operations=operations, use_qknorm=use_qknorm)  # is a self-attention if not self.disable_self_attn
         self.ff = FeedForward(inner_dim, dim_out=dim, dropout=dropout, glu=gated_ff, dtype=dtype, device=device, operations=operations)
 
         if disable_temporal_crossattention:
@@ -433,7 +454,7 @@ class BasicTransformerBlock(nn.Module):
                 context_dim_attn2 = context_dim
 
             self.attn2 = CrossAttention(query_dim=inner_dim, context_dim=context_dim_attn2,
-                                heads=n_heads, dim_head=d_head, dropout=dropout, dtype=dtype, device=device, operations=operations)  # is self-attn if context is none
+                                heads=n_heads, dim_head=d_head, dropout=dropout, dtype=dtype, device=device, operations=operations, use_qknorm=use_qknorm)  # is self-attn if context is none
             self.norm2 = operations.LayerNorm(inner_dim, dtype=dtype, device=device)
 
         self.norm1 = operations.LayerNorm(inner_dim, dtype=dtype, device=device)
@@ -510,8 +531,10 @@ class BasicTransformerBlock(nn.Module):
             patch = transformer_patches["attn1_output_patch"]
             for p in patch:
                 n = p(n, extra_options)
-
-        x += n
+        if self.learnable_lambdas:  #selfattn lambda3
+            x = x * self.learnedlambda3 + n
+        else:
+            x += n
         if "middle_patch" in transformer_patches:
             patch = transformer_patches["middle_patch"]
             for p in patch:
@@ -550,14 +573,20 @@ class BasicTransformerBlock(nn.Module):
             patch = transformer_patches["attn2_output_patch"]
             for p in patch:
                 n = p(n, extra_options)
+        
+        if self.learnable_lambdas:  #crossattn lambda2
+            x = x * self.learnedlambda2 + n
+        else:
+            x += n
 
-        x += n
         if self.is_res:
             x_skip = x
         x = self.ff(self.norm3(x))
         if self.is_res:
-            x += x_skip
-
+            if self.learnable_lambdas:  #FF lambda1
+                x += x_skip * self.learnedlambda1
+            else:
+                x += x_skip
         return x
 
 
@@ -573,12 +602,18 @@ class SpatialTransformer(nn.Module):
     def __init__(self, in_channels, n_heads, d_head,
                  depth=1, dropout=0., context_dim=None,
                  disable_self_attn=False, use_linear=False,
-                 use_checkpoint=True, dtype=None, device=None, operations=ops):
+                 use_checkpoint=True, dtype=None, device=None, operations=ops, learnable_lambdas=0, use_qknorm=False):
         super().__init__()
         if exists(context_dim) and not isinstance(context_dim, list):
             context_dim = [context_dim] * depth
         self.in_channels = in_channels
         inner_dim = n_heads * d_head
+        self.learnable_lambdas = learnable_lambdas
+        self.use_qknorm=use_qknorm
+        if self.learnable_lambdas:
+            self.learnedlambda1 = nn.Parameter(torch.tensor(1.0))   #resnet or MLP
+            self.learnedlambda2 = nn.Parameter(torch.tensor(1.0))   #x-attn
+            self.learnedlambda3 = nn.Parameter(torch.tensor(1.0))   #s-attn
         self.norm = operations.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True, dtype=dtype, device=device)
         if not use_linear:
             self.proj_in = operations.Conv2d(in_channels,
@@ -591,7 +626,7 @@ class SpatialTransformer(nn.Module):
 
         self.transformer_blocks = nn.ModuleList(
             [BasicTransformerBlock(inner_dim, n_heads, d_head, dropout=dropout, context_dim=context_dim[d],
-                                   disable_self_attn=disable_self_attn, checkpoint=use_checkpoint, dtype=dtype, device=device, operations=operations)
+                                   disable_self_attn=disable_self_attn, checkpoint=use_checkpoint, dtype=dtype, device=device, operations=operations, learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm)
                 for d in range(depth)]
         )
         if not use_linear:
@@ -623,7 +658,11 @@ class SpatialTransformer(nn.Module):
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w).contiguous()
         if not self.use_linear:
             x = self.proj_out(x)
-        return x + x_in
+        #if self.learnable_lambdas:
+        if hasattr(self, "learnedlambda1"):
+            return x + self.learnedlambda1*x_in
+        else:
+            return x + x_in
 
 
 class SpatialVideoTransformer(SpatialTransformer):

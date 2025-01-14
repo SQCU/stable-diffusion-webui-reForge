@@ -54,8 +54,9 @@ class ModelSamplingDiscrete(torch.nn.Module):
         self.linear_start = linear_start
         self.linear_end = linear_end
 
-        # self.register_buffer('betas', torch.tensor(betas, dtype=torch.float32))
-        # self.register_buffer('alphas_cumprod', torch.tensor(alphas_cumprod, dtype=torch.float32))
+            #why commented out?
+        self.register_buffer('betas', torch.tensor(betas, dtype=torch.float32))
+        self.register_buffer('alphas_cumprod', torch.tensor(alphas_cumprod, dtype=torch.float32))
         # self.register_buffer('alphas_cumprod_prev', torch.tensor(alphas_cumprod_prev, dtype=torch.float32))
 
         sigmas = ((1 - alphas_cumprod) / alphas_cumprod) ** 0.5
