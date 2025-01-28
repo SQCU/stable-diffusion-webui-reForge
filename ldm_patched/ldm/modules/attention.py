@@ -321,13 +321,17 @@ def attention_xformers(q, k, v, heads, mask=None):
     )
     return out
 
-def attention_pytorch(q, k, v, heads, mask=None, use_qknorm=False, scale=None):
+def attention_pytorch(q, k, v, heads, mask=None, use_qknorm=False, use_qklayernorm=False, scale=None):
     b, _, dim_head = q.shape
     dim_head //= heads
     q, k, v = map(
         lambda t: t.view(b, -1, heads, dim_head).transpose(1, 2),
         (q, k, v),
     )
+
+    if use_qklayernorm: #you wouldn't believe how long it took to get here.
+        q = dynamic_shape_layernorm(q)
+        k = dynamic_shape_layernorm(k)
 
     if use_qknorm:
         #this is the qknorm part!
@@ -344,6 +348,15 @@ def attention_pytorch(q, k, v, heads, mask=None, use_qknorm=False, scale=None):
     )
     return out
 
+def dynamic_shape_layernorm(inputter):
+    inputter = inputter.transpose(1,2)  #rotate!
+    #i am so sorry haha
+    #normalized_shape seems to require adjacencies, i tried a few other things first.
+    inner_shape = inputter.size()[3:]   
+
+    nn.functional.layer_norm(inputter, normalized_shape=inner_shape)   
+    inputter = inputter.transpose(1,2)                  #reverse rotate!
+    return inputter
 
 optimized_attention = attention_basic
 
@@ -380,7 +393,7 @@ def optimized_attention_for_device(device, mask=False, small_input=False):
 
 
 class CrossAttention(nn.Module):
-    def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0., dtype=None, device=None, operations=ops, use_qknorm=False):
+    def __init__(self, query_dim, context_dim=None, heads=8, dim_head=64, dropout=0., dtype=None, device=None, operations=ops, use_qknorm=False, use_qklayernorm=False):
         super().__init__()
         inner_dim = dim_head * heads
         context_dim = default(context_dim, query_dim)
@@ -388,6 +401,7 @@ class CrossAttention(nn.Module):
         self.use_qknorm=use_qknorm
         if self.use_qknorm:
             self.qkn_gnought = nn.Parameter(torch.tensor(1.0))
+        self.use_qklayernorm = use_qklayernorm
 
         self.heads = heads
         self.dim_head = dim_head
@@ -408,6 +422,8 @@ class CrossAttention(nn.Module):
         else:
             v = self.to_v(context)
 
+        if self.use_qklayernorm:
+            out = optimized_attention(q, k, v, self.heads, use_qknorm=True, scale=self.qkn_gnought)
         if self.use_qknorm:
             out = optimized_attention(q, k, v, self.heads, use_qknorm=False, scale=self.qkn_gnought)
         if mask is None:
@@ -419,7 +435,7 @@ class CrossAttention(nn.Module):
 
 class BasicTransformerBlock(nn.Module):
     def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True, ff_in=False, inner_dim=None,
-                 disable_self_attn=False, disable_temporal_crossattention=False, switch_temporal_ca_to_sa=False, dtype=None, device=None, operations=ops, learnable_lambdas=0, use_qknorm=False):
+                 disable_self_attn=False, disable_temporal_crossattention=False, switch_temporal_ca_to_sa=False, dtype=None, device=None, operations=ops, learnable_lambdas=0, use_qknorm=False, use_qklayernorm=False):
         super().__init__()
 
         self.ff_in = ff_in or inner_dim is not None
@@ -440,7 +456,7 @@ class BasicTransformerBlock(nn.Module):
 
         self.disable_self_attn = disable_self_attn
         self.attn1 = CrossAttention(query_dim=inner_dim, heads=n_heads, dim_head=d_head, dropout=dropout,
-                              context_dim=context_dim if self.disable_self_attn else None, dtype=dtype, device=device, operations=operations, use_qknorm=use_qknorm)  # is a self-attention if not self.disable_self_attn
+                              context_dim=context_dim if self.disable_self_attn else None, dtype=dtype, device=device, operations=operations, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm)  # is a self-attention if not self.disable_self_attn
         self.ff = FeedForward(inner_dim, dim_out=dim, dropout=dropout, glu=gated_ff, dtype=dtype, device=device, operations=operations)
 
         if disable_temporal_crossattention:
@@ -454,7 +470,7 @@ class BasicTransformerBlock(nn.Module):
                 context_dim_attn2 = context_dim
 
             self.attn2 = CrossAttention(query_dim=inner_dim, context_dim=context_dim_attn2,
-                                heads=n_heads, dim_head=d_head, dropout=dropout, dtype=dtype, device=device, operations=operations, use_qknorm=use_qknorm)  # is self-attn if context is none
+                                heads=n_heads, dim_head=d_head, dropout=dropout, dtype=dtype, device=device, operations=operations, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm)  # is self-attn if context is none
             self.norm2 = operations.LayerNorm(inner_dim, dtype=dtype, device=device)
 
         self.norm1 = operations.LayerNorm(inner_dim, dtype=dtype, device=device)
@@ -602,7 +618,7 @@ class SpatialTransformer(nn.Module):
     def __init__(self, in_channels, n_heads, d_head,
                  depth=1, dropout=0., context_dim=None,
                  disable_self_attn=False, use_linear=False,
-                 use_checkpoint=True, dtype=None, device=None, operations=ops, learnable_lambdas=0, use_qknorm=False):
+                 use_checkpoint=True, dtype=None, device=None, operations=ops, learnable_lambdas=0, use_qknorm=False, use_qklayernorm=False):
         super().__init__()
         if exists(context_dim) and not isinstance(context_dim, list):
             context_dim = [context_dim] * depth
@@ -626,7 +642,7 @@ class SpatialTransformer(nn.Module):
 
         self.transformer_blocks = nn.ModuleList(
             [BasicTransformerBlock(inner_dim, n_heads, d_head, dropout=dropout, context_dim=context_dim[d],
-                                   disable_self_attn=disable_self_attn, checkpoint=use_checkpoint, dtype=dtype, device=device, operations=operations, learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm)
+                                   disable_self_attn=disable_self_attn, checkpoint=use_checkpoint, dtype=dtype, device=device, operations=operations, learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm)
                 for d in range(depth)]
         )
         if not use_linear:

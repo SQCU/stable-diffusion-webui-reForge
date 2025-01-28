@@ -474,7 +474,8 @@ class UNetModel(nn.Module):
         device=None,
         operations=ops,
         learnable_lambdas=0,
-        use_qknorm=False
+        use_qknorm=False,
+        use_qklayernorm=False
     ):
         super().__init__()
 
@@ -537,6 +538,7 @@ class UNetModel(nn.Module):
         )
         self.learnable_lambdas = learnable_lambdas
         self.use_qknorm = use_qknorm
+        self.use_qklayernorm = use_qklayernorm
 
         if self.num_classes is not None:
             if isinstance(self.num_classes, int):
@@ -577,7 +579,8 @@ class UNetModel(nn.Module):
             use_checkpoint=False,
             disable_self_attn=False,
             learnable_lambdas=0,
-            use_qknorm=False
+            use_qknorm=False,
+            use_qklayernorm=False
         ):
             if use_temporal_attention:
                 return SpatialVideoTransformer(
@@ -604,7 +607,7 @@ class UNetModel(nn.Module):
                                 ch, num_heads, dim_head, depth=depth, context_dim=context_dim,
                                 disable_self_attn=disable_self_attn, use_linear=use_linear_in_transformer,
                                 use_checkpoint=use_checkpoint, dtype=self.dtype, device=device, operations=operations, 
-                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm 
+                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm
                             )
 
         def get_resblock(
@@ -700,7 +703,7 @@ class UNetModel(nn.Module):
                         layers.append(get_attention_layer(
                                 ch, num_heads, dim_head, depth=num_transformers, context_dim=context_dim,
                                 disable_self_attn=disabled_sa, use_checkpoint=use_checkpoint,
-                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm)
+                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm)
                         )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
@@ -766,7 +769,7 @@ class UNetModel(nn.Module):
             mid_block += [get_attention_layer(  # always uses a self-attn
                             ch, num_heads, dim_head, depth=transformer_depth_middle, context_dim=context_dim,
                             disable_self_attn=disable_middle_self_attn, use_checkpoint=use_checkpoint, 
-                            learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm 
+                            learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm 
                         ),
             get_resblock(
                 merge_factor=merge_factor,
@@ -830,7 +833,7 @@ class UNetModel(nn.Module):
                             get_attention_layer(
                                 ch, num_heads, dim_head, depth=num_transformers, context_dim=context_dim,
                                 disable_self_attn=disabled_sa, use_checkpoint=use_checkpoint, 
-                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm
+                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm
                             )
                         )
                 if level and i == self.num_res_blocks[level]:

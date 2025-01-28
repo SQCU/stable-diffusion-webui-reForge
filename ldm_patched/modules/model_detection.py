@@ -159,6 +159,13 @@ def detect_unet_config(state_dict, key_prefix, dtype):
         if statedict_qknyoink(qknormkey) 
         }
 
+    def statedict_qklayernormyoink(name):
+        return "dynamic_shape_layernorm" in name.lower()
+
+    qklayernormset = {
+        qklnkey:state_dict[qklnkey] for qklnkey in state_dict_keys if statedict_qklayernormyoink(qklnkey)
+    }
+
     unet_config["in_channels"] = in_channels
     unet_config["out_channels"] = out_channels
     unet_config["model_channels"] = model_channels
@@ -174,6 +181,8 @@ def detect_unet_config(state_dict, key_prefix, dtype):
         unet_config["learnable_lambdas"] = lambdalevel(lambdakeyset) # we LOVE compatibility patches
     if len(qknormkeyset)>1:
         unet_config["use_qknorm"] = True
+    if len(qklayernormset)>1:
+        unet_config["use_qklayernorm"] = True
 
     if video_model:
         unet_config["extra_ff_mix_layer"] = True
