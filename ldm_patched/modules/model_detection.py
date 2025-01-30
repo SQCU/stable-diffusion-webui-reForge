@@ -159,12 +159,23 @@ def detect_unet_config(state_dict, key_prefix, dtype):
         if statedict_qknyoink(qknormkey) 
         }
 
+    #if it works once do it twice
     def statedict_qklayernormyoink(name):
         return "dynamic_shape_layernorm" in name.lower()
 
     qklayernormset = {
         qklnkey:state_dict[qklnkey] for qklnkey in state_dict_keys if statedict_qklayernormyoink(qklnkey)
     }
+
+    #if it works twice do it 100 times. 
+    #spiritually, an edit is actually more atomic if you can remove it without interactions :)
+    def statedict_swiglu_switcharooyoink(name):
+        return "swiglu_switcharoo" in name.lower()
+
+    swiglu_switcharoo_set = {
+        swigswitchkey:state_dict[swigswitchkey] for swigswitchkey in state_dict_keys if statedict_swiglu_switcharooyoink(swigswitchkey)
+    }
+
 
     unet_config["in_channels"] = in_channels
     unet_config["out_channels"] = out_channels
@@ -176,6 +187,7 @@ def detect_unet_config(state_dict, key_prefix, dtype):
     unet_config["transformer_depth_middle"] = transformer_depth_middle
     unet_config['use_linear_in_transformer'] = use_linear_in_transformer
     unet_config["context_dim"] = context_dim
+
     if len(lambdakeyset)>1:
         #unet_config["learnable_lambdas"] = True
         unet_config["learnable_lambdas"] = lambdalevel(lambdakeyset) # we LOVE compatibility patches
@@ -183,6 +195,14 @@ def detect_unet_config(state_dict, key_prefix, dtype):
         unet_config["use_qknorm"] = True
     if len(qklayernormset)>1:
         unet_config["use_qklayernorm"] = True
+    if len(swiglu_switcharoo_set)>1:
+        #literally any key should be fine!
+        swigsetkeys = swiglu_switcharoo_set.keys()
+        #copy to make sure something doesn't depend on the viewed state dict.
+        swkey = swigsetkey.pop()
+        #pop any key
+        unet_config["swiglu_switcharoo"] = state_dict[swkey]
+        #and assign the literal state dict value of the key just in case there are networks initialized to switcharoo_false.
 
     if video_model:
         unet_config["extra_ff_mix_layer"] = True

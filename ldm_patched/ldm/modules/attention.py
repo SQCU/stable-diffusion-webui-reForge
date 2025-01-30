@@ -60,24 +60,31 @@ def init_(tensor):
 
 # feedforward
 class GEGLU(nn.Module):
-    def __init__(self, dim_in, dim_out, dtype=None, device=None, operations=ops):
+    def __init__(self, dim_in, dim_out, dtype=None, device=None, operations=ops, swiglu_switcharoo = False):
         super().__init__()
         self.proj = operations.Linear(dim_in, dim_out * 2, dtype=dtype, device=device)
+        self.swiglu_switcharoo=swiglu_switcharoo
 
     def forward(self, x):
         x, gate = self.proj(x).chunk(2, dim=-1)
-        return x * F.gelu(gate)
+        if self.swiglu_switcharoo: 
+            return x * nn.functional.silu(gate)
+        else:
+            return x * F.gelu(gate)
 
 
 class FeedForward(nn.Module):
-    def __init__(self, dim, dim_out=None, mult=4, glu=False, dropout=0., dtype=None, device=None, operations=ops):
+    def __init__(self, dim, dim_out=None, 
+    mult=4, glu=False, dropout=0., 
+    dtype=None, device=None, operations=ops,
+    swiglu_switcharoo=False):
         super().__init__()
         inner_dim = int(dim * mult)
         dim_out = default(dim_out, dim)
         project_in = nn.Sequential(
             operations.Linear(dim, inner_dim, dtype=dtype, device=device),
             nn.GELU()
-        ) if not glu else GEGLU(dim, inner_dim, dtype=dtype, device=device, operations=operations)
+        ) if not glu else GEGLU(dim, inner_dim, dtype=dtype, device=device, operations=operations, swiglu_switcharoo=swiglu_switcharoo)
 
         self.net = nn.Sequential(
             project_in,
@@ -435,7 +442,8 @@ class CrossAttention(nn.Module):
 
 class BasicTransformerBlock(nn.Module):
     def __init__(self, dim, n_heads, d_head, dropout=0., context_dim=None, gated_ff=True, checkpoint=True, ff_in=False, inner_dim=None,
-                 disable_self_attn=False, disable_temporal_crossattention=False, switch_temporal_ca_to_sa=False, dtype=None, device=None, operations=ops, learnable_lambdas=0, use_qknorm=False, use_qklayernorm=False):
+                 disable_self_attn=False, disable_temporal_crossattention=False, switch_temporal_ca_to_sa=False, dtype=None, device=None, operations=ops,
+                 learnable_lambdas=0, use_qknorm=False, use_qklayernorm=False, swiglu_switcharoo=False):
         super().__init__()
 
         self.ff_in = ff_in or inner_dim is not None
@@ -450,6 +458,7 @@ class BasicTransformerBlock(nn.Module):
             self.learnedlambda2 = nn.Parameter(torch.tensor(1.0))   #x-attn
             self.learnedlambda3 = nn.Parameter(torch.tensor(1.0))   #s-attn
 
+        self.swiglu_switcharoo=swiglu_switcharoo
         if self.ff_in:
             self.norm_in = operations.LayerNorm(dim, dtype=dtype, device=device)
             self.ff_in = FeedForward(dim, dim_out=inner_dim, dropout=dropout, glu=gated_ff, dtype=dtype, device=device, operations=operations)
@@ -457,7 +466,7 @@ class BasicTransformerBlock(nn.Module):
         self.disable_self_attn = disable_self_attn
         self.attn1 = CrossAttention(query_dim=inner_dim, heads=n_heads, dim_head=d_head, dropout=dropout,
                               context_dim=context_dim if self.disable_self_attn else None, dtype=dtype, device=device, operations=operations, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm)  # is a self-attention if not self.disable_self_attn
-        self.ff = FeedForward(inner_dim, dim_out=dim, dropout=dropout, glu=gated_ff, dtype=dtype, device=device, operations=operations)
+        self.ff = FeedForward(inner_dim, dim_out=dim, dropout=dropout, glu=gated_ff, dtype=dtype, device=device, operations=operations, swiglu_switcharoo=self.swiglu_switcharoo)
 
         if disable_temporal_crossattention:
             if switch_temporal_ca_to_sa:
@@ -618,7 +627,9 @@ class SpatialTransformer(nn.Module):
     def __init__(self, in_channels, n_heads, d_head,
                  depth=1, dropout=0., context_dim=None,
                  disable_self_attn=False, use_linear=False,
-                 use_checkpoint=True, dtype=None, device=None, operations=ops, learnable_lambdas=0, use_qknorm=False, use_qklayernorm=False):
+                 use_checkpoint=True, dtype=None, device=None, operations=ops, 
+                 learnable_lambdas=0, use_qknorm=False, use_qklayernorm=False,
+                 swiglu_switcharoo=False):
         super().__init__()
         if exists(context_dim) and not isinstance(context_dim, list):
             context_dim = [context_dim] * depth
@@ -630,6 +641,8 @@ class SpatialTransformer(nn.Module):
             self.learnedlambda1 = nn.Parameter(torch.tensor(1.0))   #resnet or MLP
             self.learnedlambda2 = nn.Parameter(torch.tensor(1.0))   #x-attn
             self.learnedlambda3 = nn.Parameter(torch.tensor(1.0))   #s-attn
+        self.swiglu_switcharoo=swiglu_switcharoo
+        
         self.norm = operations.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True, dtype=dtype, device=device)
         if not use_linear:
             self.proj_in = operations.Conv2d(in_channels,
@@ -642,7 +655,10 @@ class SpatialTransformer(nn.Module):
 
         self.transformer_blocks = nn.ModuleList(
             [BasicTransformerBlock(inner_dim, n_heads, d_head, dropout=dropout, context_dim=context_dim[d],
-                                   disable_self_attn=disable_self_attn, checkpoint=use_checkpoint, dtype=dtype, device=device, operations=operations, learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm)
+                                   disable_self_attn=disable_self_attn, checkpoint=use_checkpoint, 
+                                   dtype=dtype, device=device, operations=operations, 
+                                   learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm,
+                                   swiglu_switcharoo=self.swiglu_switcharoo)
                 for d in range(depth)]
         )
         if not use_linear:

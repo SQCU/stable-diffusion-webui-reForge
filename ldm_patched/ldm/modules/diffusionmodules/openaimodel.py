@@ -475,7 +475,8 @@ class UNetModel(nn.Module):
         operations=ops,
         learnable_lambdas=0,
         use_qknorm=False,
-        use_qklayernorm=False
+        use_qklayernorm=False,
+        swiglu_switcharoo=False
     ):
         super().__init__()
 
@@ -539,6 +540,7 @@ class UNetModel(nn.Module):
         self.learnable_lambdas = learnable_lambdas
         self.use_qknorm = use_qknorm
         self.use_qklayernorm = use_qklayernorm
+        self.swiglu_switcharoo= swiglu_switcharoo
 
         if self.num_classes is not None:
             if isinstance(self.num_classes, int):
@@ -580,7 +582,8 @@ class UNetModel(nn.Module):
             disable_self_attn=False,
             learnable_lambdas=0,
             use_qknorm=False,
-            use_qklayernorm=False
+            use_qklayernorm=False,
+            swiglu_switcharoo=False
         ):
             if use_temporal_attention:
                 return SpatialVideoTransformer(
@@ -607,7 +610,8 @@ class UNetModel(nn.Module):
                                 ch, num_heads, dim_head, depth=depth, context_dim=context_dim,
                                 disable_self_attn=disable_self_attn, use_linear=use_linear_in_transformer,
                                 use_checkpoint=use_checkpoint, dtype=self.dtype, device=device, operations=operations, 
-                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm
+                                learnable_lambdas=learnable_lambdas, use_qknorm=use_qknorm, use_qklayernorm=use_qklayernorm,
+                                swiglu_switcharoo=swiglu_switcharoo
                             )
 
         def get_resblock(
