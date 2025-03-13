@@ -130,11 +130,15 @@ def detect_unet_config(state_dict, key_prefix, dtype):
     else:
         transformer_depth_middle = -1
 
+    #obsolete guessing type
     #lambdacheck:
     lambdakeyset = {}
     def statedict_lambdayoink(name):
         return "learnedlambda" in name.lower()
     def lambdalevel(ldict):
+        for key in ldict.keys():
+            if "learnedlambda1" in key.lower():
+                return 3
         for key in ldict.keys():
             if "learnedlambda3" in key.lower():
                 return 3

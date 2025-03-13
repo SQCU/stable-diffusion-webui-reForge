@@ -28,7 +28,7 @@ ops = ldm_patched.modules.ops.disable_weight_init
 # CrossAttn precision handling
 if args.disable_attention_upcast:
     print("disabling upcasting of attention")
-    _ATTN_PRECISION = "fp16"
+    _ATTN_PRECISION = "bf16"
 else:
     _ATTN_PRECISION = "fp32"
 
@@ -642,7 +642,7 @@ class SpatialTransformer(nn.Module):
             self.learnedlambda2 = nn.Parameter(torch.tensor(1.0))   #x-attn
             self.learnedlambda3 = nn.Parameter(torch.tensor(1.0))   #s-attn
         self.swiglu_switcharoo=swiglu_switcharoo
-        
+
         self.norm = operations.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True, dtype=dtype, device=device)
         if not use_linear:
             self.proj_in = operations.Conv2d(in_channels,

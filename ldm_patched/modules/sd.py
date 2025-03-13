@@ -3,6 +3,7 @@
 
 
 import torch
+import os
 
 from ldm_patched.modules import model_management
 from ldm_patched.ldm.models.autoencoder import AutoencoderKL, AutoencodingEngine
@@ -442,7 +443,12 @@ def load_checkpoint(config_path=None, ckpt_path=None, output_vae=True, output_cl
     model_config = ldm_patched.modules.supported_models_base.BASE({})
 
     from . import latent_formats
-    model_config.latent_format = latent_formats.SD15(scale_factor=scale_factor)
+    if "latents_mean"in model_config_params.keys():
+        model_config.latent_format = latent_formats.SDXL_config_meanstd(model_config_params["latents_mean"],model_config_params["latents_std"])
+    elif "scaling_factor" in model_config_params.keys():
+        model_config.latent_format = latent_formats.SDXL_configdefined(model_config_params['scaling_factor'], model_config_params['shift_factor'])
+    else:
+        model_config.latent_format = latent_formats.SD15(scale_factor=scale_factor)
     model_config.unet_config = model_detection.convert_config(unet_config)
 
     if config['model']["target"].endswith("ImageEmbeddingConditionedLatentDiffusion"):
@@ -539,6 +545,10 @@ def load_checkpoint_guess_config(ckpt_path, output_vae=True, output_clip=True, o
         if inital_load_device != torch.device("cpu"):
             print("loaded straight to GPU")
             model_management.load_model_gpu(model_patcher)
+
+    print("note: dumping detected config for inspection or reuse... are we?")
+    #with open('')
+    #yaml.dump()
 
     return (model_patcher, clip, vae, clipvision)
 
